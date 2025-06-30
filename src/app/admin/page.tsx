@@ -1,7 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 // Login Component (embedded since external import might not exist)
 interface LoginProps {
@@ -10,25 +9,54 @@ interface LoginProps {
 
 function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(false);
+
+  // ดึง allowedUsers จาก API/database
+  const [allowedUsers, setAllowedUsers] = useState<string[]>([]);
+  useEffect(() => {
+    fetch('/api/admin-users')
+      .then(res => res.json())
+      .then(data => setAllowedUsers(data.users || []));
+  }, []);
+
+  // Load remembered username from localStorage
+  useEffect(() => {
+    const remembered = localStorage.getItem('rememberedUsername');
+    if (remembered) {
+      setUsername(remembered);
+      setRememberMe(true);
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim()) return;
+    if (!username.trim()) return;
     
     setIsLoading(true);
     // Simulate login process
     setTimeout(() => {
-      onLogin(username);
+      if (rememberMe) {
+        localStorage.setItem('rememberedUsername', username);
+      } else {
+        localStorage.removeItem('rememberedUsername');
+      }
+      // ตรวจสอบ username จาก allowedUsers ที่ดึงมาจากฐานข้อมูล
+      if (allowedUsers.includes(username)) {
+        onLogin(username);
+        // redirect ไป admin/calendar
+        window.location.href = '/admin/calendar';
+      } else {
+        alert('ไม่พบชื่อผู้ใช้นี้ในระบบ');
+      }
       setIsLoading(false);
-    }, 1000);
+    }, 500);
   };
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label htmlFor="username" className="block text-sm font-medium text-gray-300 mb-2">
+        <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
           ชื่อผู้ใช้
         </label>
         <input
@@ -36,25 +64,23 @@ function Login({ onLogin }: LoginProps) {
           type="text"
           value={username}
           onChange={(e) => setUsername(e.target.value)}
-          className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
+          className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
           placeholder="กรอกชื่อผู้ใช้"
           required
         />
       </div>
       
-      <div>
-        <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-2">
-          รหัสผ่าน
-        </label>
+      <div className="flex items-center">
         <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="w-full px-4 py-3 bg-white/10 border border-white/20 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all duration-200"
-          placeholder="กรอกรหัสผ่าน"
-          required
+          id="rememberMe"
+          type="checkbox"
+          checked={rememberMe}
+          onChange={() => setRememberMe(!rememberMe)}
+          className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
         />
+        <label htmlFor="rememberMe" className="ml-2 block text-sm text-gray-700 select-none">
+          Remember me
+        </label>
       </div>
       
       <button
@@ -69,28 +95,47 @@ function Login({ onLogin }: LoginProps) {
 }
 
 export default function AdminPage() {
-  const router = useRouter();
+  const [user, setUser] = useState<string | null>(null);
+  const [checked, setChecked] = useState(false); // เพิ่ม state สำหรับเช็ค login
+
+  useEffect(() => {
+    const savedUser = localStorage.getItem('zoomMeetingUser');
+    if (savedUser) setUser(savedUser);
+    setChecked(true); // รอเช็คเสร็จค่อย render
+  }, []);
 
   const handleLogin = (username: string) => {
-    console.log(`Admin logged in as: ${username}`);
-    // Note: Using React state instead of localStorage for Claude.ai compatibility
-    // In your actual implementation, you can use localStorage
-    router.push('/');
+    setUser(username);
+    localStorage.setItem('zoomMeetingUser', username);
+    // router.push('/'); // ไม่ต้อง redirect หลัง login ที่นี่
   };
 
-  return (
-    <>
-      <div className="min-h-screen relative overflow-hidden">
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const user = localStorage.getItem('zoomMeetingUser');
+      if (!user) {
+        alert('กรุณาเข้าสู่ระบบก่อนใช้งานเมนูผู้ดูแลระบบ');
+        window.location.href = '/admin';
+      }
+    }
+  }, []);
+
+  // ถ้ายังไม่ได้เช็ค login (hydration) ให้ return null
+  if (!checked) return null;
+
+  // ถ้ายังไม่ได้ login ให้แสดง login ก่อน
+  if (!user) {
+    return (
+      <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-white via-purple-50 to-white">
         {/* Animated Background */}
-        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
-          <div className="absolute inset-0 opacity-20" style={{
-            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='0.1'%3E%3Ccircle cx='30' cy='30' r='1.5'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`
+        <div className="absolute inset-0">
+          <div className="absolute inset-0 opacity-10" style={{
+            backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%239C92AC' fill-opacity='0.08'%3E%3Ccircle cx='30' cy='30' r='1.5'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`
           }}></div>
-          
-          {/* Floating Elements */}
-          <div className="absolute top-20 left-20 w-72 h-72 bg-blue-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse"></div>
-          <div className="absolute top-40 right-20 w-72 h-72 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse" style={{ animationDelay: '2s' }}></div>
-          <div className="absolute -bottom-8 left-40 w-72 h-72 bg-pink-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-pulse" style={{ animationDelay: '4s' }}></div>
+          {/* Floating Elements (white/purple theme) */}
+          <div className="absolute top-20 left-20 w-72 h-72 bg-purple-200 rounded-full mix-blend-multiply filter blur-2xl opacity-30 animate-pulse"></div>
+          <div className="absolute top-40 right-20 w-72 h-72 bg-purple-100 rounded-full mix-blend-multiply filter blur-2xl opacity-20 animate-pulse" style={{ animationDelay: '2s' }}></div>
+          <div className="absolute -bottom-8 left-40 w-72 h-72 bg-white rounded-full mix-blend-multiply filter blur-2xl opacity-20 animate-pulse" style={{ animationDelay: '4s' }}></div>
         </div>
 
         {/* Main Content */}
@@ -122,7 +167,7 @@ export default function AdminPage() {
                   
                   <div className="w-24 h-1 bg-gradient-to-r from-blue-400 to-purple-600 rounded-full mb-4 expand-width"></div>
                   
-                  <p className="text-gray-300 text-center leading-relaxed">
+                  <p className="text-gray-700 text-center leading-relaxed">
                     <span className="block text-lg font-medium mb-1">ระบบจัดการผู้ดูแล</span>
                     <span className="block text-sm opacity-80">เข้าสู่ระบบเพื่อจัดการการจอง Zoom Meeting</span>
                   </p>
@@ -130,15 +175,35 @@ export default function AdminPage() {
 
                 {/* Login Component Container */}
                 <div className="space-y-6">
-                  <div className="rounded-xl bg-gradient-to-r from-blue-900/60 to-purple-900/60 p-6 shadow-lg">
+                  <div className="rounded-xl bg-white/80 p-6 shadow-lg">
                     <Login onLogin={handleLogin} />
                   </div>
-                  {/* Additional Security Info */}
-                  <div className="flex items-center justify-center space-x-2 text-gray-400 text-sm">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                    </svg>
-                    <span>การเชื่อมต่อปลอดภัยด้วย SSL</span>
+                  {/* System Features */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-6">
+                    <div className="flex items-center space-x-3 bg-gradient-to-r from-blue-100 to-blue-50 rounded-lg p-4 shadow">
+                      <svg className="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                      <span className="font-medium text-gray-700">ความปลอดภัยสูงด้วย SSL</span>
+                    </div>
+                    <div className="flex items-center space-x-3 bg-gradient-to-r from-purple-100 to-purple-50 rounded-lg p-4 shadow">
+                      <svg className="w-6 h-6 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 17v-6a2 2 0 012-2h2a2 2 0 012 2v6m-6 0h6" />
+                      </svg>
+                      <span className="font-medium text-purple-700">จัดการจอง Zoom ได้ง่าย</span>
+                    </div>
+                    <div className="flex items-center space-x-3 bg-gradient-to-r from-pink-100 to-pink-50 rounded-lg p-4 shadow">
+                      <svg className="w-6 h-6 text-pink-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                      </svg>
+                      <span className="font-medium text-pink-700">อนุมัติ/ยกเลิกการจองได้ทันที</span>
+                    </div>
+                    <div className="flex items-center space-x-3 bg-gradient-to-r from-green-100 to-green-50 rounded-lg p-4 shadow">
+                      <svg className="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v4a1 1 0 001 1h3m10-5h2a2 2 0 012 2v10a2 2 0 01-2 2H7a2 2 0 01-2-2v-2" />
+                      </svg>
+                      <span className="font-medium text-green-700">ดูสถิติและประวัติย้อนหลัง</span>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -150,15 +215,26 @@ export default function AdminPage() {
 
             {/* Footer */}
             <div className="text-center mt-8">
-              <p className="text-gray-400 text-sm">
+              <p className="text-gray-500 text-sm font-medium">
                 © 2025 Zoom Meeting Management System
               </p>
             </div>
           </div>
         </div>
       </div>
+    );
+  }
 
-      {/* Custom Styles */}
+  // ถ้า login แล้ว redirect ไปหน้า admin/calendar
+  if (user) {
+    if (typeof window !== 'undefined') {
+      window.location.href = '/admin/calendar';
+    }
+    return null;
+  }
+}
+
+{/* Custom Styles */}
       <style jsx>{`
         @keyframes fadeIn {
           from { opacity: 0; transform: translateY(20px); }
@@ -178,6 +254,3 @@ export default function AdminPage() {
           animation: expandWidth 1s ease-out 0.5s both;
         }
       `}</style>
-    </>
-  );
-}

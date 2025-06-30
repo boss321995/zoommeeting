@@ -4,17 +4,17 @@ import React, { useEffect, useState } from 'react';
 import { ZoomBooking, CalendarDay } from '@/types/booking';
 
 interface CalendarProps {
-  onLogout?: () => void;
   currentUser?: string;
-  onRequestLogin?: () => void; // เพิ่ม prop สำหรับเรียก login modal
+  onRequestLogin?: () => void;
+  onEditBooking?: (booking: ZoomBooking) => void;
+  onDeleteBooking?: (booking: ZoomBooking) => void;
 }
 
-const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLogin }) => {
+const Calendar: React.FC<CalendarProps> = ({ currentUser, onRequestLogin, onEditBooking, onDeleteBooking }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [selectedBooking, setSelectedBooking] = useState<ZoomBooking | null>(null);
-  const [events, setEvents] = useState<any[]>([]);
   const [bookings, setBookings] = useState<ZoomBooking[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -93,92 +93,107 @@ const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLog
 
   const calendarDays = getCalendarDays();
 
+  // Fix: Use correct type for events fetched from API
   useEffect(() => {
     setIsLoading(true);
-    fetch('/api/events')
-      .then(res => res.json())
-      .then(data => setEvents(data))
-      .finally(() => setIsLoading(false));
+    async function fetchEvents() {
+      const res = await fetch('/api/events');
+      const data = await res.json();
+      // Map raw event object to ZoomBooking
+      type RawEvent = {
+        e_id: string | number;
+        e_title?: string;
+        a_name?: string;
+        a_id?: string;
+        e_startDate: string;
+        e_endDate: string;
+        memo?: string;
+        a_participant?: number;
+        a_colorCode?: string;
+        isRecord?: boolean | number | string;
+        isStudio?: boolean | number | string;
+        meetingUrl?: string;
+      };
+      const mapped: ZoomBooking[] = (Array.isArray(data) ? data : []).map((ev: RawEvent) => ({
+        id: String(ev.e_id),
+        title: ev.e_title || '',
+        accountName: ev.a_name || '',
+        accountId: ev.a_id || '',
+        startTime: new Date(ev.e_startDate),
+        endTime: new Date(ev.e_endDate),
+        description: ev.memo || '',
+        organizer: '',
+        participants: ev.a_participant || 0,
+        status: 'confirmed',
+        color: ev.a_colorCode || '',
+        isRecord: typeof ev.isRecord === 'boolean' ? ev.isRecord : Boolean(Number(ev.isRecord)),
+        isStudio: typeof ev.isStudio === 'boolean' ? ev.isStudio : Boolean(Number(ev.isStudio)),
+        meetingUrl: ev.meetingUrl || undefined,
+      }));
+      setBookings(mapped);
+      setIsLoading(false);
+    }
+    fetchEvents();
   }, []);
 
-  useEffect(() => {
-    if (!events || events.length === 0) return;
-    const mapped: ZoomBooking[] = events.map(ev => ({
-      id: String(ev.e_id),
-      title: ev.e_title || 'ไม่ระบุหัวข้อ',
-      accountName: ev.a_name || 'ไม่ระบุ',
-      accountId: ev.a_id,
-      startTime: new Date(ev.e_startDate),
-      endTime: new Date(ev.e_endDate),
-      description: ev.memo,
-      organizer: '', // เพิ่ม logic ถ้าต้องการ
-      participants: ev.a_participant || 0,
-      status: 'confirmed', // หรือ logic อื่น
-      meetingUrl: '', // เพิ่ม logic ถ้ามี
-      color: ev.a_colorCode,
-    }));
-    setBookings(mapped);
-  }, [events]);
-
-  // Helper: เช็คว่าวันนี้เป็นวันเริ่มต้นของ booking หรือไม่
   const isSameDay = (d1: Date, d2: Date) =>
     d1.getFullYear() === d2.getFullYear() &&
     d1.getMonth() === d2.getMonth() &&
     d1.getDate() === d2.getDate();
 
-
-
   // Helper: คำนวณตำแหน่งและขนาดของ event bar ในสัปดาห์
   const getBookingPosition = (booking: ZoomBooking, weekStart: Date) => {
+    // Normalize weekStart to 00:00:00, weekEnd to 23:59:59
+    const weekStartNorm = new Date(weekStart);
+    weekStartNorm.setHours(0,0,0,0);
+    const weekEnd = new Date(weekStartNorm);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    weekEnd.setHours(23,59,59,999);
+
     const startDate = new Date(booking.startTime);
     const endDate = new Date(booking.endTime);
-    
-    // หาวันเริ่มต้นและสิ้นสุดในสัปดาห์นี้
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    
-    const effectiveStart = startDate < weekStart ? weekStart : startDate;
+
+    // effectiveStart/End: ตัดให้ไม่เกินขอบสัปดาห์
+    const effectiveStart = startDate < weekStartNorm ? weekStartNorm : startDate;
     const effectiveEnd = endDate > weekEnd ? weekEnd : endDate;
-    
+
     // คำนวณ position และ width เป็น %
-    const startDay = Math.floor((effectiveStart.getTime() - weekStart.getTime()) / (1000 * 60 * 60 * 24));
-    const endDay = Math.floor((effectiveEnd.getTime() - weekStart.getTime()) / (1000 * 60 * 60 * 24));
-    
+    const startDay = Math.floor((effectiveStart.getTime() - weekStartNorm.getTime()) / (1000 * 60 * 60 * 24));
+    const endDay = Math.floor((effectiveEnd.getTime() - weekStartNorm.getTime()) / (1000 * 60 * 60 * 24));
+
     const left = (startDay / 7) * 100;
     const width = ((endDay - startDay + 1) / 7) * 100;
-    
+
     return { left, width, startDay, endDay };
   };
 
   // จัดกลุ่ม bookings ตาม row ให้ไม่ทับซ้อนกัน (ใช้ฟังก์ชัน getBookingPosition ใหม่)
   const arrangeBookingsInWeekRows = (weekBookings: ZoomBooking[], weekStart: Date) => {
     const rows: ZoomBooking[][] = [];
-    
+
     weekBookings.forEach(booking => {
       const { startDay, endDay } = getBookingPosition(booking, weekStart);
-      
-      // หา row ที่ไม่ทับซ้อน
+      // หา row ที่ไม่ทับซ้อน (ต้องไม่มีวันใดวันหนึ่งที่ซ้อนกับ booking อื่นใน row)
       let targetRow = -1;
       for (let i = 0; i < rows.length; i++) {
         const hasOverlap = rows[i].some(existingBooking => {
           const existing = getBookingPosition(existingBooking, weekStart);
-          return !(endDay < existing.startDay || startDay > existing.endDay);
+          // ถ้ามีวันใดวันหนึ่งที่ซ้อนกัน (เช่น วันอังคารทั้งคู่)
+          return (
+            (startDay <= existing.endDay && endDay >= existing.startDay)
+          );
         });
-        
         if (!hasOverlap) {
           targetRow = i;
           break;
         }
       }
-      
-      // ถ้าไม่มี row ที่เหมาะสม ให้สร้าง row ใหม่
       if (targetRow === -1) {
         rows.push([booking]);
       } else {
         rows[targetRow].push(booking);
       }
     });
-    
     return rows;
   };
 
@@ -202,15 +217,22 @@ const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLog
       return bookingDate > today;
     });
 
-    const confirmedBookings = currentMonthBookings.filter(b => b.status === 'confirmed');
     const pendingBookings = currentMonthBookings.filter(b => b.status === 'pending');
     const totalParticipants = currentMonthBookings.reduce((sum, b) => sum + b.participants, 0);
+
+    // เพิ่ม: คำนวณจำนวนงานที่จัดตั้งแต่ต้นปีจนถึงวันนี้ (เฉพาะที่ status เป็น confirmed)
+    const startOfYear = new Date(new Date().getFullYear(), 0, 1, 0, 0, 0, 0);
+    const now = new Date();
+    const totalThisYear = bookings.filter(b => {
+      const d = new Date(b.startTime);
+      return d >= startOfYear && d <= now && b.status === 'confirmed';
+    }).length;
 
     return {
       totalThisMonth: currentMonthBookings.length,
       todayCount: todayBookings.length,
       upcomingCount: upcomingBookings.length,
-      confirmedCount: confirmedBookings.length,
+      confirmedCount: totalThisYear, // ใช้ confirmedCount สำหรับการ์ดสุดท้าย
       pendingCount: pendingBookings.length,
       totalParticipants
     };
@@ -245,13 +267,14 @@ const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLog
             ตารางการจอง Zoom Meeting
           </h1>
         </div>
-        
         <div className="flex flex-wrap items-center gap-3 bg-white rounded-2xl shadow-lg p-4">
           <button
             onClick={() => setCurrentDate(new Date())}
-            className="px-4 py-2 rounded-xl bg-gradient-to-r from-gray-200 to-gray-100 text-gray-700 hover:from-blue-400 hover:to-purple-400 hover:text-white font-semibold shadow transition-all duration-300"
+            className="px-5 py-2.5 rounded-2xl bg-gradient-to-r from-blue-200 via-white to-purple-200 text-blue-700 font-bold shadow-lg border border-blue-200 ring-0 focus:ring-4 focus:ring-blue-300 transition-all duration-300
+              hover:from-blue-500 hover:to-purple-500 hover:text-white hover:shadow-xl hover:scale-105 active:ring-4 active:ring-purple-300"
+            style={{ fontSize: '1.1rem', letterSpacing: '0.02em' }}
           >
-            <svg className="w-4 h-4 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 inline-block mr-2 -mt-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <circle cx="12" cy="12" r="10" strokeWidth="2" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l2 2" />
             </svg>
@@ -282,78 +305,75 @@ const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLog
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8 animate-slideUp">
-        <div className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border border-blue-100 group transform hover:-translate-y-2">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-3 bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl group-hover:from-blue-600 group-hover:to-blue-700 transition-all duration-300 shadow-lg group-hover:shadow-xl">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-3 mb-6 animate-slideUp">
+        <div className="bg-white rounded-2xl p-4 shadow-md hover:shadow-lg transition-all duration-300 border border-blue-200 group transform hover:-translate-y-1 hover:scale-102 relative overflow-hidden">
+          <div className="absolute -top-4 -right-4 opacity-8 group-hover:opacity-15 transition-all duration-300">
+            <svg className="w-16 h-16 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+          </div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="p-2.5 bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl group-hover:from-blue-600 group-hover:to-blue-700 transition-all duration-300 shadow-md group-hover:shadow-lg">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
             </div>
           </div>
-          <div className="text-3xl font-bold text-gray-800 mb-1 group-hover:text-blue-600 transition-colors">{isLoading ? '...' : monthStats.totalThisMonth}</div>
-          <div className="text-sm text-gray-600 font-medium group-hover:text-gray-700 transition-colors">การจองเดือนนี้</div>
+          <div className="text-2xl font-bold text-blue-700 mb-1 group-hover:text-blue-900 transition-colors">{isLoading ? '...' : monthStats.totalThisMonth}</div>
+          <div className="text-xs text-blue-500 font-medium group-hover:text-blue-700 transition-colors">ปริมาณการใช้งาน</div>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border border-green-100 group transform hover:-translate-y-2">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-3 bg-gradient-to-r from-green-500 to-green-600 rounded-xl group-hover:from-green-600 group-hover:to-green-700 transition-all duration-300 shadow-lg group-hover:shadow-xl">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="bg-white rounded-2xl p-4 shadow-md hover:shadow-lg transition-all duration-300 border border-green-200 group transform hover:-translate-y-1 hover:scale-102 relative overflow-hidden">
+          <div className="absolute -top-4 -right-4 opacity-8 group-hover:opacity-15 transition-all duration-300">
+            <svg className="w-16 h-16 text-green-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="p-2.5 bg-gradient-to-r from-green-500 to-green-600 rounded-xl group-hover:from-green-600 group-hover:to-green-700 transition-all duration-300 shadow-md group-hover:shadow-lg">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
           </div>
-          <div className="text-3xl font-bold text-gray-800 mb-1 group-hover:text-green-600 transition-colors">{isLoading ? '...' : monthStats.todayCount}</div>
-          <div className="text-sm text-gray-600 font-medium group-hover:text-gray-700 transition-colors">การจองวันนี้</div>
+          <div className="text-2xl font-bold text-green-700 mb-1 group-hover:text-green-900 transition-colors">{isLoading ? '...' : monthStats.todayCount}</div>
+          <div className="text-xs text-green-500 font-medium group-hover:text-green-700 transition-colors">ปริมาณงานวันนี้</div>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border border-purple-100 group transform hover:-translate-y-2">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-3 bg-gradient-to-r from-purple-500 to-purple-600 rounded-xl group-hover:from-purple-600 group-hover:to-purple-700 transition-all duration-300 shadow-lg group-hover:shadow-xl">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+        <div className="bg-white rounded-2xl p-4 shadow-md hover:shadow-lg transition-all duration-300 border border-purple-200 group transform hover:-translate-y-1 hover:scale-102 relative overflow-hidden">
+          <div className="absolute -top-4 -right-4 opacity-8 group-hover:opacity-15 transition-all duration-300">
+            <svg className="w-16 h-16 text-purple-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8L10 14" />
+            </svg>
+          </div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="p-2.5 bg-gradient-to-r from-purple-500 to-purple-600 rounded-xl group-hover:from-purple-600 group-hover:to-purple-700 transition-all duration-300 shadow-md group-hover:shadow-lg">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 7h8m0 0v8m0-8L10 14" />
               </svg>
             </div>
           </div>
-          <div className="text-3xl font-bold text-gray-800 mb-1 group-hover:text-purple-600 transition-colors">{isLoading ? '...' : monthStats.upcomingCount}</div>
-          <div className="text-sm text-gray-600 font-medium group-hover:text-gray-700 transition-colors">การจองที่จะมาถึง</div>
+          <div className="text-2xl font-bold text-purple-700 mb-1 group-hover:text-purple-900 transition-colors">{isLoading ? '...' : monthStats.upcomingCount}</div>
+          <div className="text-xs text-purple-500 font-medium group-hover:text-purple-700 transition-colors">ปริมาณการจองล่วงหน้า</div>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border border-emerald-100 group transform hover:-translate-y-2">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-3 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl group-hover:from-emerald-600 group-hover:to-emerald-700 transition-all duration-300 shadow-lg group-hover:shadow-xl">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="bg-white rounded-2xl p-4 shadow-md hover:shadow-lg transition-all duration-300 border border-emerald-200 group transform hover:-translate-y-1 hover:scale-102 relative overflow-hidden">
+          <div className="absolute -top-4 -right-4 opacity-8 group-hover:opacity-15 transition-all duration-300">
+            <svg className="w-16 h-16 text-emerald-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="p-2.5 bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-xl group-hover:from-emerald-600 group-hover:to-emerald-700 transition-all duration-300 shadow-md group-hover:shadow-lg">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
           </div>
-          <div className="text-3xl font-bold text-gray-800 mb-1 group-hover:text-emerald-600 transition-colors">{isLoading ? '...' : monthStats.confirmedCount}</div>
-          <div className="text-sm text-gray-600 font-medium group-hover:text-gray-700 transition-colors">ยืนยันแล้ว</div>
+          <div className="text-2xl font-bold text-emerald-700 mb-1 group-hover:text-emerald-900 transition-colors">{isLoading ? '...' : monthStats.confirmedCount}</div>
+          <div className="text-xs text-emerald-500 font-medium group-hover:text-emerald-700 transition-colors">การจัดที่ผ่านมาในปีนี้</div>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border border-yellow-100 group transform hover:-translate-y-2">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-3 bg-gradient-to-r from-yellow-500 to-yellow-600 rounded-xl group-hover:from-yellow-600 group-hover:to-yellow-700 transition-all duration-300 shadow-lg group-hover:shadow-xl">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l2 2m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-          </div>
-          <div className="text-3xl font-bold text-gray-800 mb-1 group-hover:text-yellow-600 transition-colors">{isLoading ? '...' : monthStats.pendingCount}</div>
-          <div className="text-sm text-gray-600 font-medium group-hover:text-gray-700 transition-colors">รอยืนยัน</div>
-        </div>
-
-        <div className="bg-white rounded-2xl p-6 shadow-lg hover:shadow-2xl transition-all duration-300 border border-indigo-100 group transform hover:-translate-y-2">
-          <div className="flex items-center justify-between mb-3">
-            <div className="p-3 bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-xl group-hover:from-indigo-600 group-hover:to-indigo-700 transition-all duration-300 shadow-lg group-hover:shadow-xl">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-            </div>
-          </div>
-          <div className="text-3xl font-bold text-gray-800 mb-1 group-hover:text-indigo-600 transition-colors">{isLoading ? '...' : monthStats.totalParticipants}</div>
-          <div className="text-sm text-gray-600 font-medium group-hover:text-gray-700 transition-colors">ผู้เข้าร่วมทั้งหมด</div>
-        </div>
       </div>
 
       {/* Loading State */}
@@ -384,10 +404,10 @@ const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLog
             </div>
           ))}
         </div>
-        {/* Calendar Days (with absolute positioned events) */}
-        <div className="relative">
+        {/* Calendar Weeks */}
+        <div>
           {(() => {
-            // แบ่ง days เป็นสัปดาห์
+            // Split days into weeks
             const weeks: CalendarDay[][] = [];
             let week: CalendarDay[] = [];
             calendarDays.forEach((day) => {
@@ -398,86 +418,124 @@ const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLog
               }
             });
             if (week.length) weeks.push(week);
-            
-            return weeks.map((weekDays, weekIdx) => (
-              <div key={weekIdx} className="relative">
-                {/* Day cells แบบธรรมดา */}
-                <div className="grid grid-cols-7 relative">
-                  {weekDays.map((day, dayIdx) => (
-                    <div
-                      key={dayIdx}
-                      className={`relative min-h-[140px] border-b border-r border-gray-100 p-3 cursor-pointer transition-all duration-300 hover:z-10 ${
-                        !day.isCurrentMonth ? 'bg-gray-50 text-gray-400' : 'hover:bg-gradient-to-br hover:from-blue-50 hover:to-purple-50'
-                      } ${selectedDate?.toDateString() === day.date.toDateString() ? 'bg-gradient-to-br from-blue-100 to-purple-100 shadow-inner ring-2 ring-blue-300' : ''}`}
-                      onClick={() => setSelectedDate(day.date)}
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <span className={`text-sm font-bold ${day.date.toDateString() === new Date().toDateString() ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg animate-pulse border-2 border-white' : ''}`}>
-                          {day.date.getDate()}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                
-                {/* Event bars แบบ absolute positioned */}
-                <div className="absolute top-0 left-0 w-full h-full pointer-events-none">
-                  {(() => {
-                    // หา bookings ที่เริ่มในสัปดาห์นี้
-                    const weekBookings = bookings.filter(booking => {
-                      const startDate = new Date(booking.startTime);
-                      return weekDays.some(day => isSameDay(day.date, startDate));
-                    });
-                    
-                    // จัดเรียง bookings เป็น rows
-                    const weekStart = weekDays[0].date;
-                    const bookingRows = arrangeBookingsInWeekRows(weekBookings, weekStart);
-                    
-                    return bookingRows.map((row, rowIdx) => (
-                      <div key={rowIdx} className="absolute w-full" style={{ top: `${36 + rowIdx * 32}px` }}>
-                        {row.map(booking => {
-                          const position = getBookingPosition(booking, weekStart);
-                          return (
-                          <div
-                            key={booking.id}
-                            className="absolute h-7 rounded-lg flex items-center text-xs font-bold px-3 shadow-lg cursor-pointer transition-all duration-300 transform hover:scale-105 hover:shadow-xl border border-white/70 pointer-events-auto"
-                            style={{
-                              left: `${position.left}%`,
-                              width: `${position.width}%`,
-                              background: booking.color || '#3B82F6',
-                              color: '#fff',
-                              zIndex: 20 + rowIdx
-                            }}
-                            title={`${booking.title} (${formatTime(booking.startTime)} - ${formatTime(booking.endTime)})`}
-                            onClick={e => { e.stopPropagation(); setSelectedBooking(booking); }}
+
+            return weeks.map((weekDays, weekIdx) => {
+              // Find bookings that overlap this week
+              const weekStart = weekDays[0].date;
+              const weekEnd = weekDays[6].date;
+              const weekBookings = bookings.filter(booking => {
+                const startDate = new Date(booking.startTime);
+                const endDate = new Date(booking.endTime);
+                return startDate <= weekEnd && endDate >= weekStart;
+              });
+              // Arrange bookings into rows (no overlap in a row)
+              const bookingRows = arrangeBookingsInWeekRows(weekBookings, weekStart);
+
+              return (
+                <div key={weekIdx} className="relative border-b border-gray-100">
+                  {/* Day cells */}
+                  <div className="grid grid-cols-7 relative">
+                    {weekDays.map((day, dayIdx) => (
+                      <div
+                        key={dayIdx}
+                        className={`relative min-h-[48px] border-r border-gray-100 p-3 cursor-pointer transition-all duration-300 hover:z-10 ${
+                          !day.isCurrentMonth ? 'bg-gray-50 text-gray-400' : 'hover:bg-gradient-to-br hover:from-blue-50 hover:to-purple-50'
+                        } ${selectedDate?.toDateString() === day.date.toDateString() ? 'bg-gradient-to-br from-blue-100 to-purple-100 shadow-inner ring-2 ring-blue-300' : ''}`}
+                        onClick={() => setSelectedDate(day.date)}
+                      >
+                        <div className="flex justify-between items-start mb-2">
+                          <span
+                            className={`text-sm font-bold ${
+                              day.date.toDateString() === new Date().toDateString()
+                                ? 'bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-full w-8 h-8 flex items-center justify-center shadow-lg animate-pulse border-2 border-white'
+                                : day.isCurrentMonth
+                                ? 'text-blue-900' // เพิ่มความเข้มของเลขวันที่ในเดือนปัจจุบัน
+                                : 'text-gray-400'
+                            }`}
                           >
-                            <span className="w-2 h-2 rounded-full mr-2 border border-white shadow" style={{background: booking.color || '#3B82F6'}}></span>
-                            <span className="truncate drop-shadow-lg flex-1">{booking.title}</span>
-                            <span className="ml-2 text-[10px] font-normal opacity-90">
-                              {formatTime(booking.startTime)} - {formatTime(booking.endTime)}
-                            </span>
-                            
-                            {/* Tooltip */}
-                            <div className="absolute left-1/2 top-full mt-2 z-50 hidden hover:block min-w-[200px] transform -translate-x-1/2">
-                              <div className="bg-white text-gray-800 rounded-xl shadow-xl p-4 text-xs font-medium border border-blue-100 animate-fadeIn">
-                                <div className="font-bold text-sm mb-2 text-blue-700">{booking.title}</div>
-                                <div className="space-y-1">
-                                  <div>Account: <span className="font-semibold text-blue-600">{booking.accountName}</span></div>
-                                  <div>เวลา: {formatTime(booking.startTime)} - {formatTime(booking.endTime)}</div>
-                                  <div>วันที่: {new Date(booking.startTime).toLocaleDateString('th-TH')} - {new Date(booking.endTime).toLocaleDateString('th-TH')}</div>
-                                  {booking.description && <div className="mt-2 text-gray-500">{booking.description}</div>}
+                            {day.date.getDate()}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Event rows (in flow, not absolute) */}
+                  {bookingRows.length > 0 && (
+                    <div className="flex flex-col w-full">
+                      {bookingRows.map((row, rowIdx) => (
+                        <div key={rowIdx} className="grid grid-cols-7 gap-0 w-full min-h-[40px]">
+                          {weekDays.map((day, dayIdx) => {
+                            // Find booking in this row that covers this day
+                            const booking = row.find(b => {
+                              const start = new Date(b.startTime);
+                              const end = new Date(b.endTime);
+                              start.setHours(0,0,0,0);
+                              end.setHours(23,59,59,999);
+                              return day.date >= start && day.date <= end;
+                            });
+                            // Only render the bar at the first day cell it appears in
+                            if (!booking) return <div key={dayIdx}></div>;
+                            // If this is not the first day of the booking in this week, skip rendering (will be spanned from the first day)
+                            const isFirstDay = isSameDay(day.date, new Date(Math.max(new Date(booking.startTime).getTime(), weekStart.getTime())));
+                            if (!isFirstDay) return null;
+                            // Calculate span
+                            const bookingStart = new Date(booking.startTime);
+                            const bookingEnd = new Date(booking.endTime);
+                            bookingStart.setHours(0,0,0,0);
+                            bookingEnd.setHours(23,59,59,999);
+                            const startIdx = weekDays.findIndex(d => isSameDay(d.date, new Date(Math.max(bookingStart.getTime(), weekStart.getTime()))));
+                            const endIdx = weekDays.findIndex(d => isSameDay(d.date, new Date(Math.min(bookingEnd.getTime(), weekEnd.getTime()))));
+                            const colSpan = endIdx - startIdx + 1;
+                            return (
+                              <div
+                                key={dayIdx}
+                                className={`col-span-${colSpan} flex items-center h-full px-1`}
+                                style={{ gridColumn: `${startIdx + 1} / span ${colSpan}` }}
+                              >
+                                <div
+                                  className="w-full rounded-lg flex flex-col items-start text-xs font-bold px-3 py-1 shadow-lg cursor-pointer transition-all duration-300 transform hover:scale-105 hover:shadow-xl border border-white/70 pointer-events-auto bg-opacity-95 mb-1"
+                                  style={{
+                                    background: booking.color || '#3B82F6',
+                                    color: '#fff',
+                                    zIndex: 20 + rowIdx,
+                                    minHeight: booking.isRecord || booking.isStudio ? '40px' : '28px',
+                                    maxHeight: '52px',
+                                  }}
+                                  title={`${booking.title} (${formatTime(booking.startTime)} - ${formatTime(booking.endTime)})`}
+                                  onClick={e => { e.stopPropagation(); setSelectedBooking(booking); }}
+                                >
+                                  <div className="flex items-center w-full">
+                                    <span className="w-2 h-2 rounded-full mr-2 border border-white shadow" style={{background: booking.color || '#3B82F6'}}></span>
+                                    <span className="truncate drop-shadow-lg flex-1 text-base leading-tight">{booking.title}</span>
+                                    <span className="ml-2 text-[10px] font-normal opacity-90">
+                                      {formatTime(booking.startTime)} - {formatTime(booking.endTime)}
+                                    </span>
+                                  </div>
+                                  {(booking.isRecord || booking.isStudio) ? (
+                                    <div className="flex gap-2 mt-1">
+                                      {booking.isRecord ? (
+                                        <span className="animate-pulse flex items-center gap-1 bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full text-[10px] font-bold border border-purple-300 shadow-sm">
+                                          <svg className="w-3 h-3 text-purple-500 animate-bounce" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="10" r="8" /></svg> REC
+                                        </span>
+                                      ) : null}
+                                      {booking.isStudio ? (
+                                        <span className="animate-pulse flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-bold border border-blue-300 shadow-sm">
+                                          <svg className="w-3 h-3 text-blue-500 animate-spin" fill="currentColor" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12" rx="2" /></svg> STU
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                  ) : null}
                                 </div>
                               </div>
-                            </div>
-                          </div>
-                          );
-                        })}
-                      </div>
-                    ));
-                  })()}
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ));
+              );
+            });
           })()}
         </div>
       </div>
@@ -636,7 +694,7 @@ const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLog
                           </svg>
                         </div>
                         <div>
-                          <p className="font-medium text-gray-600">ผู้เข้าร่วม</p>
+                          <p className="font-medium text-gray-600">จำนวนที่รับได้สูงสุด</p>
                           <p className="font-semibold">{booking.participants} คน</p>
                         </div>
                       </div>
@@ -704,12 +762,33 @@ const Calendar: React.FC<CalendarProps> = ({ onLogout, currentUser, onRequestLog
                 </svg>
               </button>
             </div>
+            {/* ปุ่มแก้ไข/ลบ เฉพาะ admin */}
+            {onEditBooking && onDeleteBooking && (
+              <div className="flex gap-2 mb-4">
+                <button onClick={() => onEditBooking(selectedBooking)} className="px-4 py-2 rounded-xl bg-gradient-to-r from-purple-500 to-blue-500 text-white font-semibold shadow hover:from-purple-600 hover:to-blue-600 transition-all duration-300">แก้ไข</button>
+                <button onClick={() => onDeleteBooking(selectedBooking)} className="px-4 py-2 rounded-xl bg-red-500 text-white font-semibold hover:bg-red-600">ลบ</button>
+              </div>
+            )}
             <div className="space-y-4">
               <div className={`p-4 rounded-2xl ${getStatusColor(selectedBooking.status)} shadow-md border border-white/80`}>
-                <h4 className="font-bold text-lg mb-2">รายละเอียดการจอง</h4>
+                <h4 className="font-bold text-lg mb-4">รายละเอียดการจอง</h4>
+                {/* แสดง Record/Studio */}
+                <div className="flex gap-8 mb-5">
+                  <div className="flex items-center gap-3">
+                    <span className="w-6 h-6 rounded-full border-2 border-purple-400 bg-white flex items-center justify-center">
+                      {selectedBooking.isRecord ? <span className="w-4 h-4 bg-purple-500 rounded-full" /> : null}
+                    </span>
+                    <span className="text-base font-semibold text-purple-700 select-none">Record: <span className={selectedBooking.isRecord ? 'text-purple-600' : 'text-gray-400'}>{selectedBooking.isRecord ? 'ใช้งาน' : 'ไม่ใช้งาน'}</span></span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="w-6 h-6 rounded-full border-2 border-blue-400 bg-white flex items-center justify-center">
+                      {selectedBooking.isStudio ? <span className="w-4 h-4 bg-blue-500 rounded-full" /> : null}
+                    </span>
+                    <span className="text-base font-semibold text-blue-700 select-none">ห้องสตูดิโอ: <span className={selectedBooking.isStudio ? 'text-blue-600' : 'text-gray-400'}>{selectedBooking.isStudio ? 'ใช้งาน' : 'ไม่ใช้งาน'}</span></span>
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <p><strong>Account:</strong> {selectedBooking.accountName}</p>
-                  <p><strong>ผู้จัด:</strong> {selectedBooking.organizer}</p>
                   <p><strong>เวลา:</strong> {formatTime(selectedBooking.startTime)} - {formatTime(selectedBooking.endTime)}</p>
                   <p><strong>ความจุสูงสุดของบัญชี:</strong> {selectedBooking.participants} คน</p>
                 </div>

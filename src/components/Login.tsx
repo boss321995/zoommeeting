@@ -57,6 +57,10 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     setTimeout(() => {
       setIsLoading(false);
       onLogin(username.trim());
+      // ถ้าเป็น admin ให้ redirect ไปหน้า admin/calendar
+      if (username.trim().toLowerCase() === 'admin') {
+        window.location.href = '/admin/calendar';
+      }
     }, 1200);
   };
 

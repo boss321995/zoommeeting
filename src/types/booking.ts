@@ -11,6 +11,8 @@ export interface ZoomBooking {
   status: 'confirmed' | 'pending' | 'cancelled';
   meetingUrl?: string;
   color?: string;
+  isRecord?: boolean;
+  isStudio?: boolean;
 }
 
 export interface CalendarDay {

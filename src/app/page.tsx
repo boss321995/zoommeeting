@@ -24,11 +24,6 @@ export default function Home() {
     setShowLogin(false);
   };
 
-  const handleLogout = () => {
-    setUser(null);
-    localStorage.removeItem('zoomMeetingUser');
-  };
-
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 flex items-center justify-center">
@@ -58,8 +53,6 @@ export default function Home() {
       {/* Calendar always visible as index page */}
       <Calendar
         currentUser={user || undefined}
-        onLogout={user ? handleLogout : undefined}
-        onRequestLogin={() => setShowLogin(true)}
       />
     </div>
   );
